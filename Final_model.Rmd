@@ -1,0 +1,162 @@
+---
+title: "Final Model: Analyzing Movie Revenue "
+author: "Andrew Batmunkh, Kevin Cheung"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(dplyr)
+library(knitr)
+```
+
+## Data Source
+
+TMDB 5000 Movie Dataset (Kaggle)  
+URL: https://www.kaggle.com/datasets/tmdb/tmdb-movie-metadata
+
+## 1. Import and Cleaning
+**"movies" is the original preliminary model with no transformation, where "movies2" is the log10 transformed model.**
+
+```{r import, message=FALSE}
+movies <- read_csv("tmdb_5000_movies.csv") %>%
+  mutate(
+    release_year  = as.integer(substr(release_date, 1, 4)),
+    primary_genre = stringr::str_match(genres, '"name"\\s*:\\s*"([^"]+)"')[,2],
+    is_english    = as.integer(original_language == "en"),       
+    has_homepage  = as.integer(!is.na(homepage) & homepage != "")
+  ) %>%
+  filter(budget > 0, revenue > 0, !is.na(primary_genre))
+
+cat("Cleaned dataset contains", nr`row(movies), "observations and", 
+    ncol(movies), "variables.\n")
+
+movies2 <- read_csv("tmdb_5000_movies.csv") %>%
+  mutate(
+    release_year   = as.integer(substr(release_date, 1, 4)),
+    primary_genre  = stringr::str_match(genres, '"name"\\s*:\\s*"([^"]+)"')[,2],
+    
+    log_budget     = ifelse(budget > 0, log10(budget), NA_real_),
+    log_revenue    = ifelse(revenue > 0, log10(revenue), NA_real_),
+    log_vote_count = ifelse(vote_count > 0, log10(vote_count), NA_real_),
+    
+    is_english     = as.integer(original_language == "en"),
+    has_homepage   = as.integer(!is.na(homepage) & homepage != "")
+  ) %>%
+  filter(budget > 0, revenue > 0, vote_count > 0, !is.na(primary_genre))
+
+cat("Cleaned dataset contains", nrow(movies2), "observations and", 
+    ncol(movies2), "variables.\n")
+
+```
+
+## 2a. Numerical Summary for prelim model
+```{r summary}
+num_vars <- c("budget","runtime","popularity","vote_average", "vote_count","release_year")
+
+num_summary <- movies %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "x") %>%
+  group_by(variable) %>%
+  summarise(
+    n      = sum(!is.na(x)),
+    mean   = mean(x, na.rm = TRUE),
+    sd     = sd(x, na.rm = TRUE),
+    min    = min(x, na.rm = TRUE),
+    q1     = quantile(x, .25, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    q3     = quantile(x, .75, na.rm = TRUE),
+    max    = max(x, na.rm = TRUE),
+    outliers = {
+      q1_ <- quantile(x, .25, na.rm = TRUE); q3_ <- quantile(x, .75, na.rm = TRUE)
+      iqr_ <- q3_ - q1_; sum(x < (q1_ - 1.5*iqr_) | x > (q3_ + 1.5*iqr_), na.rm = TRUE)
+    }
+  ) %>%
+  mutate(across(where(is.double), ~ round(.x, 2)))
+
+print.data.frame(num_summary, row.names = FALSE)
+```
+## 2b. Numerical Summary for final transformed model
+```{r}
+num_vars <- c(
+  "budget","runtime","popularity","vote_average","vote_count","release_year",
+  "log_budget","log_revenue","log_vote_count"
+)
+
+num_summary2 <- movies2 %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "x") %>%
+  group_by(variable) %>%
+  summarise(
+    n      = sum(!is.na(x)),
+    mean   = mean(x, na.rm = TRUE),
+    sd     = sd(x, na.rm = TRUE),
+    min    = min(x, na.rm = TRUE),
+    q1     = quantile(x, .25, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    q3     = quantile(x, .75, na.rm = TRUE),
+    max    = max(x, na.rm = TRUE),
+    outliers = {
+      q1_ <- quantile(x, .25, na.rm = TRUE); 
+      q3_ <- quantile(x, .75, na.rm = TRUE)
+      iqr_ <- q3_ - q1_
+      sum(x < (q1_ - 1.5*iqr_) | x > (q3_ + 1.5*iqr_), na.rm = TRUE)
+    }
+  ) %>%
+  mutate(across(where(is.double), ~ round(.x, 2)))
+
+print.data.frame(num_summary2, row.names = FALSE)
+```
+
+```{r categorical-summary}
+cat("\nPrimary Genre Distribution:\n")  
+table(movies$primary_genre)
+cat("\n\nEnglish Language Movies:\n") 
+table(movies$is_english)
+cat("\n\nMovies with Homepage:\n")  
+table(movies$has_homepage)
+```
+##3. ## 3. Final transformation Multiple Linear Regression Model
+```{r}
+fit_log <- lm(log_revenue ~ log_budget + runtime + popularity + vote_average + log_vote_count + release_year + is_english + has_homepage + primary_genre + budget:primary_genre, data = movies2)
+
+summary(fit_log)
+```
+
+## 3. Preliminary Multiple Linear Regression Model
+
+```{r model-fit}
+fit_revenue <- lm(revenue ~ budget + runtime + popularity + vote_average + vote_count + release_year + is_english + has_homepage + primary_genre + budget:primary_genre, data = movies)
+
+summary(fit_revenue)
+```
+
+## 4a. Residual Analysis for final transformation model
+
+```{r}
+par(mfrow = c(1,2))
+plot(fit_log)
+```
+
+
+## 4b. Residual Analysis for the preliminary model
+
+```{r residual-plots, fig.height=8, fig.width=8}
+par(mfrow = c(2,2))
+plot(fit_revenue)
+```
+
+
+## AIC/BIC analysis
+```{r}
+# AIC and BIC for both models
+AIC(fit_revenue)
+BIC(fit_revenue)
+
+AIC(fit_log)
+BIC(fit_log)
+```
+
